@@ -4,20 +4,9 @@
 #include "ESP8266WiFi.h"
 #include "PubSubClient.h"
 #include "ArduinoJson.h"
-
-// WiFi settings
-#define WIFI_SSID                     "WIFI_SSID"
-#define WIFI_PASS                     "WIFI_PASS"
-
-// MQTT Settings
-#define CLIENT_ID                     "air-quality"
-#define MQTT_SERVER                   "MQTT_SERVER"
-#define MQTT_PORT                     1883
-#define STATE_TOPIC                   "home/livingroom/airquality"
-#define JSON_ATTRIBUTES_TOPIC         "home/livingroom/airquality/attributes"
-#define AVAILABILITY_TOPIC            "home/livingroom/airquality/available"
-#define MQTT_USERNAME                 "MQTT_USERNAME"
-#define MQTT_PASSWORD                 "MQTT_PASSWORD"
+#include "LOLIN_EPD.h"
+#include "Adafruit_GFX.h"
+#include "config.h"
 
 // ESP8266 WiFi
 WiFiClient wifiClient;
@@ -29,16 +18,23 @@ Adafruit_SGP40 sgp;
 Adafruit_SHTC3 shtc3;
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
 
-void setup() {
+// E-Ink Display
+LOLIN_SSD1680 EPD(250, 122, EPD_DC, EPD_RST, EPD_CS, EPD_BUSY);
+
+void setup()
+{
   setupSerial();
 
   setupWifi();
   setupMqtt();
 
   setupSensors();
+
+  setupEpd();
 }
 
-void loop() {
+void loop()
+{
   int32_t voc_index;
   sensors_event_t humidity, temp;
   PM25_AQI_Data data;
@@ -56,7 +52,8 @@ void loop() {
   // Serial.print("Voc Index: ");
   // Serial.println(voc_index);
 
-  if (! aqi.read(&data)) {
+  if (! aqi.read(&data))
+  {
     // Serial.println("Could not read from AQI");
     delay(500);  // try again in a bit!
     return;
@@ -85,6 +82,8 @@ void loop() {
   // Serial.println(F("---------------------------------------"));
   // Serial.println(F("---------------------------------------"));
   
+  displayValues(temp.temperature, humidity.relative_humidity, voc_index, data, 0);
+
   createAndSendMessage(temp.temperature, humidity.relative_humidity, voc_index, data);
   createAndSendAttributesMessage(data);
 
@@ -93,12 +92,14 @@ void loop() {
   delay(30000);
 }
 
-void setupSerial(){
+void setupSerial()
+{
   Serial.begin(115200);
   Serial.println();
 }
 
-void setupWifi(){
+void setupWifi()
+{
    WiFi.begin(WIFI_SSID, WIFI_PASS);
  
   // Connecting to WiFi...
@@ -117,29 +118,40 @@ void setupWifi(){
   // Serial.println(WiFi.localIP());
 }
 
-void setupMqtt(){
+void setupMqtt()
+{
   client.setServer(MQTT_SERVER, MQTT_PORT);
   client.setKeepAlive(70);
 }
 
-void setupSensors(){
-  if (!sgp.begin()){
+void setupSensors()
+{
+  if (!sgp.begin())
+  {
     Serial.println("SGP40 sensor not found :(");
     while (1);
   }
 
-  if (!shtc3.begin()) {
+  if (!shtc3.begin())
+  {
     Serial.println("Couldn't find SHTC3");
     while (1);
   }
 
-  if (!aqi.begin_I2C()) {
+  if (!aqi.begin_I2C())
+  {
     Serial.println("Could not find PM 2.5 sensor!");
     while (1) delay(10);
   }
 }
 
-void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData){
+void setupEpd()
+{
+  EPD.begin();
+}
+
+void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData)
+{
   StaticJsonDocument<128> doc;
   JsonObject message = doc.to<JsonObject>();
    
@@ -158,7 +170,8 @@ void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, P
   // serializeJsonPretty(doc, Serial);
   // Serial.println();
 
-  if (!client.connected()) {
+  if (!client.connected())
+  {
     reconnect();
   }
 
@@ -169,33 +182,31 @@ void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, P
   // client.loop();
 }
 
-void createAndSendAttributesMessage(PM25_AQI_Data aqiData){
+void createAndSendAttributesMessage(PM25_AQI_Data aqiData)
+{
   StaticJsonDocument<256> doc;
-  JsonObject aqi = doc.to<JsonObject>();
+  JsonObject attributes = doc.to<JsonObject>();
 
-  // aqi["pm10standard"] = aqiData.pm10_standard;   // from datasheet: "should be used in the factory environment"
-  // aqi["pm25standard"] = aqiData.pm25_standard;   // from datasheet: "should be used in the factory environment"
-  // aqi["pm100standard"] = aqiData.pm100_standard; // from datasheet: "should be used in the factory environment"
-
-  // aqi["pm10env"] = aqiData.pm10_env;
-  // aqi["pm25env"] = aqiData.pm25_env;
-  // aqi["pm100env"] = aqiData.pm100_env;
+  // attributes["pm10standard"] = aqiData.pm10_standard;   // from datasheet: "should be used in the factory environment"
+  // attributes["pm25standard"] = aqiData.pm25_standard;   // from datasheet: "should be used in the factory environment"
+  // attributes["pm100standard"] = aqiData.pm100_standard; // from datasheet: "should be used in the factory environment"
   
-  aqi["particles03um"] = aqiData.particles_03um;
-  aqi["particles05um"] = aqiData.particles_05um;
-  aqi["particles10um"] = aqiData.particles_10um;
-  aqi["particles25um"] = aqiData.particles_25um;
-  aqi["particles50um"] = aqiData.particles_50um;
-  aqi["particles100um"] = aqiData.particles_100um;
+  attributes["particles03um"] = aqiData.particles_03um;
+  attributes["particles05um"] = aqiData.particles_05um;
+  attributes["particles10um"] = aqiData.particles_10um;
+  attributes["particles25um"] = aqiData.particles_25um;
+  attributes["particles50um"] = aqiData.particles_50um;
+  attributes["particles100um"] = aqiData.particles_100um;
 
   // Serial.print("Less overhead JSON message size: ");
-  // Serial.println(measureJson(aqi));
+  // Serial.println(measureJson(attributes));
   
   // Serial.println("\nPretty JSON message: ");
-  // serializeJsonPretty(aqi, Serial);
+  // serializeJsonPretty(attributes, Serial);
   // Serial.println();
 
-  if (!client.connected()) {
+  if (!client.connected())
+  {
     reconnect();
   }
 
@@ -206,7 +217,8 @@ void createAndSendAttributesMessage(PM25_AQI_Data aqiData){
   // client.loop();
 }
 
-void reconnect() {
+void reconnect()
+{
   while (!client.connected()) {       // Loop until connected to MQTT server
     //Serial.print("Attempting MQTT connection...");
     
@@ -222,7 +234,8 @@ void reconnect() {
   }
 }
 
-int getAirQualityPMIndex(PM25_AQI_Data aqiData){
+int getAirQualityPMIndex(PM25_AQI_Data aqiData)
+{
   // https://en.wikipedia.org/wiki/Air_quality_index
   float pm100 = getQualityPM100Index(aqiData.pm100_env);
   float pm25 = getQualityPM25Index(aqiData.pm25_env);
@@ -238,30 +251,144 @@ int getAirQualityPMIndex(PM25_AQI_Data aqiData){
   return index;
 }
 
-float getQualityPM100Index(int value){
-  if(value >= 0 && value < 25){
+float getQualityPM100Index(int value)
+{
+  if(value >= 0 && value < 25)
+  {
     return 1.0; // good
-  } else if(value >= 25 && value <= 50){
+  }
+  else if(value >= 25 && value <= 50)
+  {
     return 2.0; // satisfactory
-  } else if(value >= 51 && value <= 90){
+  }
+  else if(value >= 51 && value <= 90)
+  {
     return 3.0; // moderate
-  } else if(value >= 91 && value <= 180){
+  }
+  else if(value >= 91 && value <= 180)
+  {
     return 4.0; // poor
   }
   
   return 5.0; // very poor
 }
 
-float getQualityPM25Index(int value){
-  if(value >= 0 && value < 15){
+float getQualityPM25Index(int value)
+{
+  if(value >= 0 && value < 15)
+  {
     return 1.0; // good
-  } else if(value >= 15 && value <= 30){
+  }
+  else if(value >= 15 && value <= 30)
+  {
     return 2.0; // satisfactory
-  } else if(value >= 31 && value <= 55){
+  }
+  else if(value >= 31 && value <= 55)
+  {
     return 3.0; // moderate
-  } else if(value >= 56 && value <= 110){
+  }
+  else if(value >= 56 && value <= 110)
+  {
     return 4.0; // poor
   }
   
   return 5.0; // very poor
+}
+
+void displayValues(float temp, float hum, int voc, PM25_AQI_Data aqiData, int co2)
+{
+  EPD.clearBuffer();
+  EPD.fillScreen(EPD_WHITE);
+  EPD.drawLine(84, 0, 84, EPD.height(), EPD_BLACK);
+  EPD.drawLine(166, 0, 166, EPD.height(), EPD_BLACK);
+  EPD.drawLine(EPD.width(), 61, 84, 61, EPD_BLACK);
+
+  EPD.setTextColor(EPD_BLACK);
+
+  printFirstRow(temp, hum);
+  printSecondRow(voc, getAirQualityPMIndex(aqiData));
+  printCo2(co2);
+
+  EPD.display();
+}
+
+void printFirstRow(float temp, float hum)
+{
+  uint16_t headerY = 6;
+  uint16_t valueY = headerY + 30;
+  EPD.setTextSize(2);
+  
+  // title
+  EPD.setCursor(96, headerY);
+  EPD.print("Tepl.");
+  // value
+  EPD.setCursor(95, valueY);
+  EPD.print(temp, 2);
+  
+  // title
+  EPD.setCursor(181, headerY);
+  EPD.print("Vlhk.");
+  // value
+  EPD.setCursor(174, valueY);
+  EPD.print(hum);
+  EPD.print("%");
+}
+
+void printSecondRow(uint16_t voc, uint8_t pmIndex)
+{
+  uint32_t headerY = 72;
+  uint16_t valueY = headerY + 30;
+  EPD.setTextSize(2);
+  
+  // title
+  EPD.setCursor(109, headerY);
+  EPD.print("VOC");
+
+  uint32_t vocPositionX = 109;
+  if (voc < 100)
+  {
+    vocPositionX = 116;
+  }
+  else if (voc > 1000)
+  {
+    vocPositionX = 102;
+  }
+
+  // value
+  EPD.setCursor(vocPositionX, valueY);
+  EPD.print(voc);
+  
+  // title
+  EPD.setCursor(184, headerY);
+  EPD.print("PM");
+  EPD.setCursor(EPD.getCursorX(), headerY + 7);
+  EPD.setTextSize(1);
+  EPD.print("index");
+  // value
+  EPD.setTextSize(2);
+  EPD.setCursor(204, valueY);
+  EPD.print(pmIndex);
+}
+
+void printCo2(uint16_t co2)
+{
+  uint32_t headerY = 20;
+
+  // title
+  EPD.setTextSize(3);
+  EPD.setCursor(17, headerY);
+  EPD.print("CO");
+  EPD.setTextSize(2);
+  EPD.setCursor(EPD.getCursorX(), headerY + 12);
+  EPD.print(2);
+
+  // value
+  int positionX = 6;
+  if(co2 < 1000)
+  {
+    positionX = 14;
+  }
+  EPD.setTextSize(3);
+  EPD.setCursor(positionX, 82);
+  EPD.print(co2);
 }
