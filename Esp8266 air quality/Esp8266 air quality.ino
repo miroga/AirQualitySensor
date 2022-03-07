@@ -1,6 +1,7 @@
 #include "Adafruit_SGP40.h"
-#include "Adafruit_SHTC3.h"
 #include "Adafruit_PM25AQI.h"
+#include "SensirionI2CScd4x.h"
+#include "Wire.h"
 #include "ESP8266WiFi.h"
 #include "PubSubClient.h"
 #include "ArduinoJson.h"
@@ -15,8 +16,8 @@ PubSubClient client(wifiClient);
 
 // Sensors
 Adafruit_SGP40 sgp;
-Adafruit_SHTC3 shtc3;
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
+SensirionI2CScd4x scd41;
 
 // E-Ink Display
 LOLIN_SSD1680 EPD(250, 122, EPD_DC, EPD_RST, EPD_CS, EPD_BUSY);
@@ -36,21 +37,15 @@ void setup()
 void loop()
 {
   int32_t voc_index;
-  sensors_event_t humidity, temp;
   PM25_AQI_Data data;
+  uint16_t co2;
+  float temperature;
+  float humidity;
 
-  shtc3.getEvent(&humidity, &temp);
-  // Serial.print("Temp *C = "); Serial.print(temp.temperature); Serial.print("\t\t");
-  // Serial.print("Hum. % = "); Serial.println(humidity.relative_humidity);
+  scd41.measureSingleShot();
+  scd41.readMeasurement(co2, temperature, humidity);
 
-  // uint16_t sraw;
-  // sraw = sgp.measureRaw(temp.temperature, humidity.relative_humidity);
-  // Serial.print("SGP40 raw measurement: ");
-  // Serial.println(sraw);
-
-  voc_index = sgp.measureVocIndex(temp.temperature, humidity.relative_humidity);
-  // Serial.print("Voc Index: ");
-  // Serial.println(voc_index);
+  voc_index = sgp.measureVocIndex(temperature, humidity);
 
   if (! aqi.read(&data))
   {
@@ -58,38 +53,15 @@ void loop()
     delay(500);  // try again in a bit!
     return;
   }
-  // Serial.println("AQI reading success");
-
-  // Serial.println();
-  // Serial.println(F("---------------------------------------"));
-  // Serial.println(F("Concentration Units (standard)"));
-  // Serial.println(F("---------------------------------------"));
-  // Serial.print(F("PM 1.0: ")); Serial.print(data.pm10_standard);
-  // Serial.print(F("\t\tPM 2.5: ")); Serial.print(data.pm25_standard);
-  // Serial.print(F("\t\tPM 10: ")); Serial.println(data.pm100_standard);
-  // Serial.println(F("Concentration Units (environmental)"));
-  // Serial.println(F("---------------------------------------"));
-  // Serial.print(F("PM 1.0: ")); Serial.print(data.pm10_env);
-  // Serial.print(F("\t\tPM 2.5: ")); Serial.print(data.pm25_env);
-  // Serial.print(F("\t\tPM 10: ")); Serial.println(data.pm100_env);
-  // Serial.println(F("---------------------------------------"));
-  // Serial.print(F("Particles > 0.3um / 0.1L air:")); Serial.println(data.particles_03um);
-  // Serial.print(F("Particles > 0.5um / 0.1L air:")); Serial.println(data.particles_05um);
-  // Serial.print(F("Particles > 1.0um / 0.1L air:")); Serial.println(data.particles_10um);
-  // Serial.print(F("Particles > 2.5um / 0.1L air:")); Serial.println(data.particles_25um);
-  // Serial.print(F("Particles > 5.0um / 0.1L air:")); Serial.println(data.particles_50um);
-  // Serial.print(F("Particles > 10 um / 0.1L air:")); Serial.println(data.particles_100um);
-  // Serial.println(F("---------------------------------------"));
-  // Serial.println(F("---------------------------------------"));
   
-  displayValues(temp.temperature, humidity.relative_humidity, voc_index, data, 0);
+  displayValues(temperature, humidity, voc_index, data, co2);
 
-  createAndSendMessage(temp.temperature, humidity.relative_humidity, voc_index, data);
+  createAndSendMessage(temperature, humidity, voc_index, data, co2);
   createAndSendAttributesMessage(data);
 
   client.loop();
 
-  delay(30000);
+  delay(60000);
 }
 
 void setupSerial()
@@ -121,20 +93,18 @@ void setupWifi()
 void setupMqtt()
 {
   client.setServer(MQTT_SERVER, MQTT_PORT);
-  client.setKeepAlive(70);
+  client.setKeepAlive(150);
 }
 
 void setupSensors()
 {
+   Wire.begin();
+   scd41.begin(Wire);
+   scd41.stopPeriodicMeasurement();
+
   if (!sgp.begin())
   {
     Serial.println("SGP40 sensor not found :(");
-    while (1);
-  }
-
-  if (!shtc3.begin())
-  {
-    Serial.println("Couldn't find SHTC3");
     while (1);
   }
 
@@ -150,25 +120,19 @@ void setupEpd()
   EPD.begin();
 }
 
-void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData)
+void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2)
 {
   StaticJsonDocument<128> doc;
   JsonObject message = doc.to<JsonObject>();
    
   message["temperature"] = temperature;
   message["humidity"] = humidity;
+  message["co2"] = co2;
   message["vocindex"] = vocIndex;
   message["pmindex"] = getAirQualityPMIndex(aqiData);
   message["pm10env"] = aqiData.pm10_env;
   message["pm25env"] = aqiData.pm25_env;
   message["pm100env"] = aqiData.pm100_env;
-
-  // Serial.print("Less overhead JSON message size: ");
-  // Serial.println(measureJson(doc));
-  
-  // Serial.println("\nPretty JSON message: ");
-  // serializeJsonPretty(doc, Serial);
-  // Serial.println();
 
   if (!client.connected())
   {
@@ -197,13 +161,6 @@ void createAndSendAttributesMessage(PM25_AQI_Data aqiData)
   attributes["particles25um"] = aqiData.particles_25um;
   attributes["particles50um"] = aqiData.particles_50um;
   attributes["particles100um"] = aqiData.particles_100um;
-
-  // Serial.print("Less overhead JSON message size: ");
-  // Serial.println(measureJson(attributes));
-  
-  // Serial.println("\nPretty JSON message: ");
-  // serializeJsonPretty(attributes, Serial);
-  // Serial.println();
 
   if (!client.connected())
   {
@@ -240,13 +197,6 @@ int getAirQualityPMIndex(PM25_AQI_Data aqiData)
   float pm100 = getQualityPM100Index(aqiData.pm100_env);
   float pm25 = getQualityPM25Index(aqiData.pm25_env);
   int index = round((pm100 + pm25) / 2);
-
-  // Serial.print("PM10: ");
-  // Serial.print(pm100);
-  // Serial.print("; PM2.5: ");
-  // Serial.print(pm25);
-  // Serial.print("; Index: ");
-  // Serial.println(index);
 
   return index;
 }
