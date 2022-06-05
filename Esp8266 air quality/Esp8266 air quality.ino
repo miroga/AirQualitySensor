@@ -8,6 +8,7 @@
 #include "LOLIN_EPD.h"
 #include "Adafruit_GFX.h"
 #include "config.h"
+#include "Adafruit_SHTC3.h"
 
 // ESP8266 WiFi
 WiFiClient wifiClient;
@@ -17,6 +18,7 @@ PubSubClient client(wifiClient);
 // Sensors
 Adafruit_SGP40 sgp;
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
+Adafruit_SHTC3 shtc3 = Adafruit_SHTC3();
 SensirionI2CScd4x scd41;
 
 // E-Ink Display
@@ -39,13 +41,16 @@ void loop()
   int32_t voc_index;
   PM25_AQI_Data data;
   uint16_t co2;
-  float temperature;
-  float humidity;
+  float scd41Temperature;
+  float scd41Humidity;
+  sensors_event_t humidity, temp;
 
   scd41.measureSingleShot();
-  scd41.readMeasurement(co2, temperature, humidity);
+  scd41.readMeasurement(co2, scd41Temperature, scd41Humidity);
+  
+  shtc3.getEvent(&humidity, &temp);
 
-  voc_index = sgp.measureVocIndex(temperature, humidity);
+  voc_index = sgp.measureVocIndex(temp.temperature, humidity.relative_humidity);
 
   if (! aqi.read(&data))
   {
@@ -53,15 +58,20 @@ void loop()
     delay(500);  // try again in a bit!
     return;
   }
-  
-  displayValues(temperature, humidity, voc_index, data, co2);
 
-  createAndSendMessage(temperature, humidity, voc_index, data, co2);
-  createAndSendAttributesMessage(data);
+  processValues(temp.temperature, humidity.relative_humidity, voc_index, data, co2);
 
   client.loop();
 
   delay(60000);
+}
+
+void processValues(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2)
+{
+  displayValues(temperature, humidity, vocIndex, aqiData, co2);
+
+  createAndSendMessage(temperature, humidity, vocIndex, aqiData, co2);
+  createAndSendAttributesMessage(aqiData);
 }
 
 void setupSerial()
@@ -98,9 +108,16 @@ void setupMqtt()
 
 void setupSensors()
 {
-   Wire.begin();
-   scd41.begin(Wire);
-   scd41.stopPeriodicMeasurement();
+  Wire.begin();
+  scd41.begin(Wire);
+  scd41.stopPeriodicMeasurement();
+
+  // calibrateScd41();
+
+  if (! shtc3.begin()) {
+    Serial.println("Couldn't find SHTC3");
+    while (1) delay(1);
+  }
 
   if (!sgp.begin())
   {
@@ -112,6 +129,21 @@ void setupSensors()
   {
     Serial.println("Could not find PM 2.5 sensor!");
     while (1) delay(10);
+  }
+}
+
+void calibrateScd41()
+{
+  scd41.setSensorAltitude(237);
+  uint16_t result = scd41.persistSettings();
+
+  if(result != 0)
+  {
+    Serial.println("SCD41 could not save calibration settings.");
+  }
+  else
+  {
+    Serial.println("SCD41 saved calibration settings.");
   }
 }
 
