@@ -1,5 +1,6 @@
 #include "Adafruit_SGP40.h"
 #include "Adafruit_PM25AQI.h"
+#include "Adafruit_VEML7700.h"
 #include "SensirionI2CScd4x.h"
 #include "Wire.h"
 #include "ESP8266WiFi.h"
@@ -19,10 +20,15 @@ PubSubClient client(wifiClient);
 Adafruit_SGP40 sgp;
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
 Adafruit_SHTC3 shtc3 = Adafruit_SHTC3();
+Adafruit_VEML7700 veml = Adafruit_VEML7700();
 SensirionI2CScd4x scd41;
 
 // E-Ink Display
 LOLIN_SSD1680 EPD(250, 122, EPD_DC, EPD_RST, EPD_CS, EPD_BUSY);
+
+const unsigned long MeasurementInterval = 10*60*1000; // 10 minutes
+unsigned long previousMillis = 0;
+bool isFirstLoopRun = true;
 
 void setup()
 {
@@ -38,12 +44,33 @@ void setup()
 
 void loop()
 {
+  unsigned long currentMillis = millis();
+  unsigned long elapsedMillis = currentMillis - previousMillis;
+
+  if(isFirstLoopRun)
+  {
+    takeMeasurements();
+
+    isFirstLoopRun = false;
+  }
+
+  if (elapsedMillis >= MeasurementInterval)
+  {
+    previousMillis = currentMillis;
+
+    takeMeasurements();
+  }
+}
+
+void takeMeasurements()
+{
   int32_t voc_index;
   PM25_AQI_Data data;
   uint16_t co2;
   float scd41Temperature;
   float scd41Humidity;
   sensors_event_t humidity, temp;
+  float lux =  veml.readLux();
 
   scd41.measureSingleShot();
   scd41.readMeasurement(co2, scd41Temperature, scd41Humidity);
@@ -59,18 +86,16 @@ void loop()
     return;
   }
 
-  processValues(temp.temperature, humidity.relative_humidity, voc_index, data, co2);
+  processValues(temp.temperature, humidity.relative_humidity, voc_index, data, co2, lux);
 
   client.loop();
-
-  delay(60000);
 }
 
-void processValues(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2)
+void processValues(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2, float lux)
 {
   displayValues(temperature, humidity, vocIndex, aqiData, co2);
 
-  createAndSendMessage(temperature, humidity, vocIndex, aqiData, co2);
+  createAndSendMessage(temperature, humidity, vocIndex, aqiData, co2, lux);
   createAndSendAttributesMessage(aqiData);
 }
 
@@ -103,7 +128,8 @@ void setupWifi()
 void setupMqtt()
 {
   client.setServer(MQTT_SERVER, MQTT_PORT);
-  client.setKeepAlive(150);
+  int keepAlive = 10*60*2.5; // 25 minutes
+  client.setKeepAlive(keepAlive);
 }
 
 void setupSensors()
@@ -130,6 +156,12 @@ void setupSensors()
     Serial.println("Could not find PM 2.5 sensor!");
     while (1) delay(10);
   }
+
+  if (!veml.begin())
+  {
+    Serial.println("VEML7700 sensor not found");
+    while (1);
+  }
 }
 
 void calibrateScd41()
@@ -152,7 +184,7 @@ void setupEpd()
   EPD.begin();
 }
 
-void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2)
+void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2, float lux)
 {
   StaticJsonDocument<128> doc;
   JsonObject message = doc.to<JsonObject>();
@@ -161,6 +193,7 @@ void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, P
   message["humidity"] = humidity;
   message["co2"] = co2;
   message["vocindex"] = vocIndex;
+  message["lux"] = lux;
   message["pmindex"] = getAirQualityPMIndex(aqiData);
   message["pm10env"] = aqiData.pm10_env;
   message["pm25env"] = aqiData.pm25_env;
