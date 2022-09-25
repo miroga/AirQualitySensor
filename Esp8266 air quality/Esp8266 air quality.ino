@@ -11,6 +11,8 @@
 #include "config.h"
 #include "Adafruit_SHTC3.h"
 
+#define HOSTNAME                      "Air Quality Sensor"
+
 // ESP8266 WiFi
 WiFiClient wifiClient;
 // MQTT
@@ -70,7 +72,7 @@ void takeMeasurements()
   float scd41Temperature;
   float scd41Humidity;
   sensors_event_t humidity, temp;
-  float lux =  veml.readLux();
+  float lux = veml.readLux();
 
   scd41.measureSingleShot();
   scd41.readMeasurement(co2, scd41Temperature, scd41Humidity);
@@ -107,7 +109,8 @@ void setupSerial()
 
 void setupWifi()
 {
-   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
  
   // Connecting to WiFi...
   // Serial.print("Connecting to ");
@@ -186,7 +189,7 @@ void setupEpd()
 
 void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2, float lux)
 {
-  StaticJsonDocument<128> doc;
+  StaticJsonDocument<256> doc;
   JsonObject message = doc.to<JsonObject>();
    
   message["temperature"] = temperature;
@@ -204,7 +207,9 @@ void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, P
     reconnect();
   }
 
-  char buffer[128];
+  // serializeJson(doc, Serial);
+
+  char buffer[256];
   size_t n = serializeJson(doc, buffer);
   client.publish(STATE_TOPIC, buffer, n);
 
