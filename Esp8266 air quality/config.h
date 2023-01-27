@@ -15,5 +15,6 @@
 #define STATE_TOPIC                   "home/livingroom/airquality"
 #define JSON_ATTRIBUTES_TOPIC         "home/livingroom/airquality/attributes"
 #define AVAILABILITY_TOPIC            "home/livingroom/airquality/available"
+#define CALIBRATION_TOPIC             "home/livingroom/airquality/calibrate"
 #define MQTT_USERNAME                 "MQTT_USERNAME"
 #define MQTT_PASSWORD                 "MQTT_PASSWORD"

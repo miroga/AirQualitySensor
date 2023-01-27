@@ -42,6 +42,8 @@ void setup()
   setupSensors();
 
   setupEpd();
+
+  Serial.println("Setup done.");
 }
 
 void loop()
@@ -62,6 +64,9 @@ void loop()
 
     takeMeasurements();
   }
+
+  client.loop();
+  delay(1000);
 }
 
 void takeMeasurements()
@@ -89,8 +94,6 @@ void takeMeasurements()
   }
 
   processValues(temp.temperature, humidity.relative_humidity, voc_index, data, co2, lux);
-
-  client.loop();
 }
 
 void processValues(float temperature, float humidity, int32_t vocIndex, PM25_AQI_Data aqiData, uint16_t co2, float lux)
@@ -124,13 +127,13 @@ void setupWifi()
 
   // Connected to WiFi
   // Serial.println();
-  // Serial.print("Connected! IP address: ");
   // Serial.println(WiFi.localIP());
 }
 
 void setupMqtt()
 {
   client.setServer(MQTT_SERVER, MQTT_PORT);
+  client.setCallback(callback);
   int keepAlive = 10*60*2.5; // 25 minutes
   client.setKeepAlive(keepAlive);
 }
@@ -140,8 +143,6 @@ void setupSensors()
   Wire.begin();
   scd41.begin(Wire);
   scd41.stopPeriodicMeasurement();
-
-  // calibrateScd41();
 
   if (! shtc3.begin()) {
     Serial.println("Couldn't find SHTC3");
@@ -164,21 +165,6 @@ void setupSensors()
   {
     Serial.println("VEML7700 sensor not found");
     while (1);
-  }
-}
-
-void calibrateScd41()
-{
-  scd41.setSensorAltitude(237);
-  uint16_t result = scd41.persistSettings();
-
-  if(result != 0)
-  {
-    Serial.println("SCD41 could not save calibration settings.");
-  }
-  else
-  {
-    Serial.println("SCD41 saved calibration settings.");
   }
 }
 
@@ -212,8 +198,6 @@ void createAndSendMessage(float temperature, float humidity, int32_t vocIndex, P
   char buffer[256];
   size_t n = serializeJson(doc, buffer);
   client.publish(STATE_TOPIC, buffer, n);
-
-  // client.loop();
 }
 
 void createAndSendAttributesMessage(PM25_AQI_Data aqiData)
@@ -240,8 +224,6 @@ void createAndSendAttributesMessage(PM25_AQI_Data aqiData)
   char buffer[256];
   size_t n = serializeJson(doc, buffer);
   client.publish(JSON_ATTRIBUTES_TOPIC, buffer, n);
-
-  // client.loop();
 }
 
 void reconnect()
@@ -252,6 +234,7 @@ void reconnect()
     if (client.connect(CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD, AVAILABILITY_TOPIC, 2, true, "offline")) {       //Connect to MQTT server
       //Serial.println("connected"); 
       client.publish(AVAILABILITY_TOPIC, "online", true);         // Once connected, publish online to the availability topic
+      client.subscribe(CALIBRATION_TOPIC);
     } else {
       // Serial.print("failed, rc=");
       // Serial.print(client.state());
@@ -411,4 +394,93 @@ void printCo2(uint16_t co2)
   EPD.setTextSize(3);
   EPD.setCursor(positionX, 82);
   EPD.print(co2);
+}
+
+void callback(char* topic, byte* payload, unsigned int length)
+{
+  StaticJsonDocument <256> doc;
+  deserializeJson(doc, payload);
+  // serializeJson(doc, Serial);
+
+  if (strcmp(topic, CALIBRATION_TOPIC) == 0)
+  {
+    Serial.println("Starting calibration...");
+
+    long co2Correction = doc["co2"];
+    long altitudeCorrection = doc["altitude"];
+    
+    bool isCalibrated = calibrateScd41(co2Correction, altitudeCorrection);
+
+    if(isCalibrated)
+    {
+      Serial.println("Calibration done.");
+    }
+    else
+    {
+      Serial.println("Calibration could not be performed.");
+    }
+  }
+}
+
+bool calibrateScd41(long co2Correction, long altitudeCorrection)
+{
+  // int stopCode = scd41.stopPeriodicMeasurement();
+  // // delay(1000);
+
+  // if(stopCode != 0)
+  // {
+  //   Serial.println("Periodic measurements could not be stopped.");
+
+  //   return false;
+  // }
+
+  bool altitudeIsSet = false;
+  bool co2CorrectionIsSet = false;
+
+  if(altitudeCorrection >= 0)
+  {
+    scd41.setSensorAltitude(237);
+    altitudeIsSet = true;
+  }
+
+  if(co2Correction >= 400)
+  {
+    uint16_t correction;
+    scd41.performForcedRecalibration(410, correction);
+    co2CorrectionIsSet = true;
+
+    Serial.print("Correction: ");
+    Serial.println(correction);
+  }
+
+  if(altitudeIsSet || co2CorrectionIsSet)
+  {
+    int settingsSavedCode = scd41.persistSettings();
+
+    if(settingsSavedCode != 0)
+    {
+      Serial.println("SCD41 could not save calibration settings.");
+      return false;
+    }
+    else
+    {
+      Serial.println("SCD41 saved calibration settings.");
+    }
+  }
+  else
+  {
+    Serial.println("No calibration performed.");
+    
+    return false;    
+  }
+
+  // bool started = scd41.startPeriodicMeasurement();
+
+  // if(!started)
+  // {
+  //   Serial.println("Could not start periodic measurements.");
+  //   return false;
+  // }
+
+  return true;
 }
