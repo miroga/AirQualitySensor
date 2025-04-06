@@ -1,29 +1,29 @@
 #include "Adafruit_SGP40.h"
 #include "Adafruit_PM25AQI.h"
 #include "Adafruit_VEML7700.h"
-#include "SensirionI2CScd4x.h"
+#include "Adafruit_SHT4x.h"
+#include "SensirionI2cScd4x.h"
 #include "Wire.h"
-#include "ESP8266WiFi.h"
+#include "WiFi.h"
 #include "PubSubClient.h"
 #include "ArduinoJson.h"
 #include "LOLIN_EPD.h"
 #include "Adafruit_GFX.h"
 #include "config.h"
-#include "Adafruit_SHTC3.h"
 
 #define HOSTNAME                      "Air Quality Sensor"
 
-// ESP8266 WiFi
 WiFiClient wifiClient;
+
 // MQTT
 PubSubClient client(wifiClient);
 
 // Sensors
 Adafruit_SGP40 sgp;
 Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
-Adafruit_SHTC3 shtc3 = Adafruit_SHTC3();
+Adafruit_SHT4x sht40 = Adafruit_SHT4x();
 Adafruit_VEML7700 veml = Adafruit_VEML7700();
-SensirionI2CScd4x scd41;
+SensirionI2cScd4x scd41;
 
 // E-Ink Display
 LOLIN_SSD1680 EPD(250, 122, EPD_DC, EPD_RST, EPD_CS, EPD_BUSY);
@@ -35,6 +35,7 @@ bool isFirstLoopRun = true;
 void setup()
 {
   setupSerial();
+  Serial.println("Setup started.");
 
   setupWifi();
   setupMqtt();
@@ -82,7 +83,7 @@ void takeMeasurements()
   scd41.measureSingleShot();
   scd41.readMeasurement(co2, scd41Temperature, scd41Humidity);
   
-  shtc3.getEvent(&humidity, &temp);
+  sht40.getEvent(&humidity, &temp);
 
   voc_index = sgp.measureVocIndex(temp.temperature, humidity.relative_humidity);
 
@@ -122,12 +123,12 @@ void setupWifi()
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(100);
-    // Serial.print(".");
+    Serial.print(".");
   }
 
   // Connected to WiFi
-  // Serial.println();
-  // Serial.println(WiFi.localIP());
+  Serial.println();
+  Serial.println(WiFi.localIP());
 }
 
 void setupMqtt()
@@ -140,14 +141,17 @@ void setupMqtt()
 
 void setupSensors()
 {
-  Wire.begin();
-  scd41.begin(Wire);
+  Wire.begin(21, 22);
+  scd41.begin(Wire, SCD41_I2C_ADDR_62);
   scd41.stopPeriodicMeasurement();
 
-  if (! shtc3.begin()) {
-    Serial.println("Couldn't find SHTC3");
+  if (!sht40.begin()) {
+    Serial.println("Couldn't find SHT40");
     while (1) delay(1);
   }
+
+  sht40.setHeater(SHT4X_NO_HEATER);
+  sht40.setPrecision(SHT4X_HIGH_PRECISION);
 
   if (!sgp.begin())
   {
